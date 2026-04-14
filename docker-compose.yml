@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: givs-law-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: givs_law
+      POSTGRES_USER: givs
+      POSTGRES_PASSWORD: givs_local_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - givs_pgdata:/var/lib/postgresql/data
+
+volumes:
+  givs_pgdata:

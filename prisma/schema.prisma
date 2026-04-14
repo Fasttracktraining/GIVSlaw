@@ -1,0 +1,511 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  DIRECTOR
+  ADVISOR
+  CASEWORKER
+  CLIENT
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  SOCIAL_MEDIA
+  GOOGLE
+  FUNNEL
+  WALK_IN
+  OTHER
+}
+
+enum LeadUrgency {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+enum CaseStage {
+  ENQUIRY
+  CONSULTATION
+  ONBOARDING
+  IN_PROGRESS
+  SUBMITTED
+  AWAITING_DECISION
+  APPROVED
+  REFUSED
+  APPEAL
+  CLOSED
+}
+
+enum CasePriority {
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum DocumentCategory {
+  PASSPORT
+  BRP
+  BANK_STATEMENT
+  PAYSLIP
+  EMPLOYMENT_LETTER
+  TENANCY_AGREEMENT
+  UTILITY_BILL
+  PHOTO
+  MARRIAGE_CERT
+  BIRTH_CERT
+  QUALIFICATION
+  TRANSLATION
+  COVER_LETTER
+  SUPPORTING_LETTER
+  OTHER
+}
+
+enum DocumentStatus {
+  UPLOADED
+  UNDER_REVIEW
+  APPROVED
+  NEEDS_CORRECTION
+  MISSING
+  INVALID
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum ConsultationType {
+  FREE_INTRO
+  PAID_CONSULTATION
+  FOLLOW_UP
+}
+
+enum ConsultationStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum ServiceCategory {
+  VISA
+  CITIZENSHIP
+  ASYLUM
+  BUSINESS
+  OTHER
+}
+
+enum FunnelStep {
+  LANDED
+  VIEWED_GUIDE
+  CLICKED_CTA
+  BOOKED
+}
+
+enum LeadTemperature {
+  HOT
+  WARM
+  COLD
+}
+
+enum CallOutcomeType {
+  NO_ANSWER
+  INTERESTED
+  NOT_INTERESTED
+  CALLBACK_LATER
+  WRONG_NUMBER
+}
+
+// ─── USER ────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  role          Role     @default(CLIENT)
+  firstName     String
+  lastName      String
+  phone         String?
+  isActive            Boolean  @default(true)
+  emailNotifications  Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  assignedLeads      Lead[]         @relation("AdvisorLeads")
+  assignedCases      Case[]         @relation("AdvisorCases")
+  clientCases        Case[]         @relation("ClientCases")
+  uploadedDocuments  Document[]     @relation("UploadedDocuments")
+  reviewedDocuments  Document[]     @relation("ReviewedDocuments")
+  authoredNotes      Note[]
+  assignedTasks      Task[]
+  consultationsAsAdvisor  Consultation[] @relation("AdvisorConsultations")
+  consultationsAsClient   Consultation[] @relation("ClientConsultations")
+  caseActivities     CaseActivity[]
+  callOutcomes       CallOutcome[]
+  leadActivities     LeadActivity[] @relation("LeadActivities")
+  sentMessages       Message[]      @relation("SentMessages")
+  availability       AdvisorAvailability[]
+  blockedDates       BlockedDate[]
+
+  @@map("users")
+}
+
+// ─── LEAD ────────────────────────────────────────────────
+
+model Lead {
+  id               String      @id @default(uuid())
+  firstName        String
+  lastName         String
+  email            String
+  phone            String?
+  source           LeadSource  @default(WEBSITE)
+  urgency          LeadUrgency @default(MEDIUM)
+  status           LeadStatus  @default(NEW)
+  primaryService   String?
+  selectedServices String[]
+  funnelSlug       String?
+  notes            String?
+
+  // Follow-up & contact tracking
+  nextFollowUpAt   DateTime?
+  lastContactedAt  DateTime?
+  temperature      LeadTemperature @default(WARM)
+
+  assignedAdvisorId String?
+  assignedAdvisor   User?   @relation("AdvisorLeads", fields: [assignedAdvisorId], references: [id])
+
+  convertedToCaseId String? @unique
+  convertedToCase   Case?   @relation("ConvertedFromLead", fields: [convertedToCaseId], references: [id])
+
+  consultations Consultation[]
+  funnelEntries FunnelEntry[]
+  callOutcomes  CallOutcome[]
+  activities    LeadActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("leads")
+}
+
+// ─── LEAD ACTIVITY ───────────────────────────────────────
+
+model LeadActivity {
+  id          String @id @default(uuid())
+  action      String // e.g. "call_logged", "status_changed", "followup_set", "lead_assigned", "lead_converted"
+  description String
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("LeadActivities", fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("lead_activities")
+}
+
+// ─── CALL OUTCOME ────────────────────────────────────────
+
+model CallOutcome {
+  id       String          @id @default(uuid())
+  outcome  CallOutcomeType
+  note     String?
+
+  leadId   String
+  lead     Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  calledById String
+  calledBy   User   @relation(fields: [calledById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("call_outcomes")
+}
+
+// ─── CASE ────────────────────────────────────────────────
+
+model Case {
+  id       String @id @default(uuid())
+  caseRef  String @unique // e.g. "GIVS-2026-0042"
+
+  clientId String
+  client   User   @relation("ClientCases", fields: [clientId], references: [id])
+
+  convertedFromLead Lead? @relation("ConvertedFromLead")
+
+  type              String     // service slug, e.g. "spouse-visa"
+  stage             CaseStage  @default(ENQUIRY)
+  immigrationStatus String?
+  priority          CasePriority @default(NORMAL)
+  deadline          DateTime?
+
+  assignedAdvisorId String
+  assignedAdvisor   User   @relation("AdvisorCases", fields: [assignedAdvisorId], references: [id])
+
+  // Payment tracking
+  totalFee      Decimal?       @db.Decimal(10, 2)
+  amountPaid    Decimal?       @default(0) @db.Decimal(10, 2)
+  paymentStatus PaymentStatus  @default(UNPAID)
+  paymentNotes  String?
+
+  // Google Drive bridge
+  driveLink String?
+
+  // Relations
+  documents  Document[]
+  notes      Note[]
+  tasks      Task[]
+  activities CaseActivity[]
+  consultations Consultation[]
+  messages   Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("cases")
+}
+
+// ─── DOCUMENT ────────────────────────────────────────────
+
+model Document {
+  id       String           @id @default(uuid())
+  name     String
+  category DocumentCategory @default(OTHER)
+  status   DocumentStatus   @default(UPLOADED)
+  feedback String?
+  fileUrl  String
+  fileSize Int
+  mimeType String
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User   @relation("UploadedDocuments", fields: [uploadedById], references: [id])
+
+  reviewedById String?
+  reviewedBy   User?    @relation("ReviewedDocuments", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("documents")
+}
+
+// ─── NOTE ────────────────────────────────────────────────
+
+model Note {
+  id         String  @id @default(uuid())
+  content    String
+  isInternal Boolean @default(true) // false = visible to client
+
+  caseId   String
+  case     Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notes")
+}
+
+// ─── TASK ────────────────────────────────────────────────
+
+model Task {
+  id          String     @id @default(uuid())
+  title       String
+  description String?
+  status      TaskStatus @default(TODO)
+  dueDate     DateTime?
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  assignedToId String?
+  assignedTo   User?  @relation(fields: [assignedToId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tasks")
+}
+
+// ─── CONSULTATION ────────────────────────────────────────
+
+model Consultation {
+  id          String             @id @default(uuid())
+  service     String
+  type        ConsultationType   @default(FREE_INTRO)
+  status      ConsultationStatus @default(PENDING)
+  scheduledAt DateTime
+  duration    Int                @default(30) // minutes
+  meetingLink String?
+  notes       String?
+
+  leadId    String?
+  lead      Lead?  @relation(fields: [leadId], references: [id])
+
+  clientId  String?
+  client    User?  @relation("ClientConsultations", fields: [clientId], references: [id])
+
+  advisorId String?
+  advisor   User?  @relation("AdvisorConsultations", fields: [advisorId], references: [id])
+
+  caseId    String?
+  case      Case?  @relation(fields: [caseId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("consultations")
+}
+
+// ─── SERVICE ─────────────────────────────────────────────
+
+model Service {
+  slug             String          @id
+  name             String
+  shortDescription String
+  category         ServiceCategory @default(OTHER)
+  hasFunnel        Boolean         @default(false)
+  isActive         Boolean         @default(true)
+  sortOrder        Int             @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("services")
+}
+
+// ─── FUNNEL ENTRY ────────────────────────────────────────
+
+model FunnelEntry {
+  id         String     @id @default(uuid())
+  funnelSlug String
+  email      String?
+  step       FunnelStep @default(LANDED)
+  source     String?
+
+  leadId String?
+  lead   Lead?  @relation(fields: [leadId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("funnel_entries")
+}
+
+// ─── CASE ACTIVITY (TIMELINE / AUDIT LOG) ────────────────
+
+model CaseActivity {
+  id          String @id @default(uuid())
+  action      String // e.g. "stage_changed", "document_uploaded"
+  description String // human-readable
+  metadata    Json?
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?  @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("case_activities")
+}
+
+// ─── MESSAGE ─────────────────────────────────────────────
+
+model Message {
+  id      String @id @default(uuid())
+  content String
+
+  caseId  String
+  case    Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  senderId String
+  sender   User   @relation("SentMessages", fields: [senderId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("messages")
+}
+
+// ─── ADVISOR AVAILABILITY ────────────────────────────────
+
+model AdvisorAvailability {
+  id          String @id @default(uuid())
+  dayOfWeek   Int    // 0=Sunday, 1=Monday ... 6=Saturday
+  startTime   String // "09:00"
+  endTime     String // "17:00"
+  slotMinutes Int    @default(30)
+
+  advisorId String
+  advisor   User   @relation(fields: [advisorId], references: [id], onDelete: Cascade)
+
+  @@unique([advisorId, dayOfWeek])
+  @@map("advisor_availability")
+}
+
+// ─── BLOCKED DATE ────────────────────────────────────────
+
+model BlockedDate {
+  id     String   @id @default(uuid())
+  date   DateTime // date only (start of day)
+  reason String?
+
+  advisorId String
+  advisor   User   @relation(fields: [advisorId], references: [id], onDelete: Cascade)
+
+  @@unique([advisorId, date])
+  @@map("blocked_dates")
+}
+
+// ─── EMAIL LOG ───────────────────────────────────────────
+
+model EmailLog {
+  id        String   @id @default(uuid())
+  to        String
+  subject   String
+  template  String   // e.g. "consultation_booked", "document_reviewed"
+  status    String   @default("sent") // "sent", "failed"
+  error     String?
+
+  createdAt DateTime @default(now())
+
+  @@map("email_logs")
+}
