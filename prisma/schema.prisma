@@ -144,6 +144,36 @@ enum CallOutcomeType {
   WRONG_NUMBER
 }
 
+enum CaseType {
+  SPOUSE_VISA_ENTRY_CLEARANCE
+  SPOUSE_VISA_EXTENSION_ILR
+  SKILLED_WORKER_ENTRY
+  SKILLED_WORKER_EXTENSION
+  ILR_10YR_LONG_RESIDENCE
+  BRITISH_CITIZENSHIP_NATURALISATION
+}
+
+enum CaseWorkflowStage {
+  ENQUIRY
+  DOCUMENT_COLLECTION
+  CASE_REVIEW
+  SUBMISSION
+  DECISION_TRACKING
+}
+
+enum ChecklistCategory {
+  LEGAL
+  OPERATIONAL
+  COMPLIANCE
+}
+
+enum DocRequirementStatus {
+  PENDING
+  UPLOADED
+  VERIFIED
+  REJECTED
+}
+
 // ─── USER ────────────────────────────────────────────────
 
 model User {
@@ -175,6 +205,11 @@ model User {
   sentMessages       Message[]      @relation("SentMessages")
   availability       AdvisorAvailability[]
   blockedDates       BlockedDate[]
+  verifiedDocRequirements CaseDocumentRequirement[] @relation("VerifiedByUser")
+  completedChecklists     ChecklistItem[]           @relation("CompletedByUser")
+  stageTransitions        StageTransition[]
+  documentAccessLogs      DocumentAccessLog[]
+  uploadedDocVersions     DocumentVersion[]         @relation("UploadedVersionByUser")
 
   @@map("users")
 }
@@ -282,6 +317,17 @@ model Case {
   // Google Drive bridge
   driveLink String?
 
+  // ── Case Engine fields ──
+  caseType          CaseType?
+  workflowStage     CaseWorkflowStage  @default(ENQUIRY)
+  riskLevel         String?             // "low", "medium", "high"
+  nextActionLabel   String?
+  nextActionPriority String?
+  nextActionUpdatedAt DateTime?
+  complianceAmlDone         Boolean @default(false)
+  complianceConfidentialitySigned Boolean @default(false)
+  complianceConflictCheckDone     Boolean @default(false)
+
   // Relations
   documents  Document[]
   notes      Note[]
@@ -289,6 +335,10 @@ model Case {
   activities CaseActivity[]
   consultations Consultation[]
   messages   Message[]
+  checklists          ChecklistItem[]
+  docRequirements     CaseDocumentRequirement[]
+  stageTransitions    StageTransition[]
+  documentAccessLogs  DocumentAccessLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -317,6 +367,10 @@ model Document {
   reviewedById String?
   reviewedBy   User?    @relation("ReviewedDocuments", fields: [reviewedById], references: [id])
   reviewedAt   DateTime?
+
+  versions    DocumentVersion[]
+  requirement CaseDocumentRequirement? @relation("LinkedDocument")
+  accessLogs  DocumentAccessLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -508,4 +562,113 @@ model EmailLog {
   createdAt DateTime @default(now())
 
   @@map("email_logs")
+}
+
+// ─── CASE ENGINE ─────────────────────────────────────────
+
+model CaseTemplate {
+  id          String   @id @default(uuid())
+  caseType    CaseType @unique
+  name        String
+  description String?
+  documents   Json     // required doc specs array
+  legalChecklist      Json
+  operationalChecklist Json
+  complianceChecklist  Json
+  letterTemplates     Json?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("case_templates")
+}
+
+model CaseDocumentRequirement {
+  id          String              @id @default(uuid())
+  caseId      String
+  case        Case                @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  category    DocumentCategory
+  label       String
+  description String?
+  isRequired  Boolean             @default(true)
+  forStage    CaseWorkflowStage?
+  documentId  String?             @unique
+  document    Document?           @relation("LinkedDocument", fields: [documentId], references: [id])
+  status      DocRequirementStatus @default(PENDING)
+  verifiedById String?
+  verifiedBy  User?               @relation("VerifiedByUser", fields: [verifiedById], references: [id])
+  verifiedAt  DateTime?
+  feedback    String?
+  sortOrder   Int                 @default(0)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@map("case_document_requirements")
+}
+
+model DocumentVersion {
+  id          String   @id @default(uuid())
+  documentId  String
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version     Int
+  fileUrl     String
+  fileSize    Int
+  mimeType    String
+  uploadedById String
+  uploadedBy  User     @relation("UploadedVersionByUser", fields: [uploadedById], references: [id])
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@map("document_versions")
+}
+
+model ChecklistItem {
+  id            String            @id @default(uuid())
+  caseId        String
+  case          Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  category      ChecklistCategory
+  label         String
+  description   String?
+  isRequired    Boolean           @default(true)
+  forStage      CaseWorkflowStage?
+  isCompleted   Boolean           @default(false)
+  completedById String?
+  completedBy   User?             @relation("CompletedByUser", fields: [completedById], references: [id])
+  completedAt   DateTime?
+  notes         String?
+  sortOrder     Int               @default(0)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@map("checklist_items")
+}
+
+model StageTransition {
+  id             String            @id @default(uuid())
+  caseId         String
+  case           Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  fromStage      CaseWorkflowStage
+  toStage        CaseWorkflowStage
+  userId         String
+  user           User              @relation(fields: [userId], references: [id])
+  gatingMet      Boolean           @default(true)
+  overrideReason String?
+  createdAt      DateTime          @default(now())
+
+  @@map("stage_transitions")
+}
+
+model DocumentAccessLog {
+  id         String   @id @default(uuid())
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  caseId     String?
+  case       Case?    @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  action     String   // "viewed", "downloaded", "printed"
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@map("document_access_logs")
 }
